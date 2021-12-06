@@ -45,6 +45,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/controller-manager/pkg/informerfactory"
 	"k8s.io/kubernetes/pkg/controller/apis/config/scheme"
+	"k8s.io/kubernetes/pkg/controller/garbagecollector/metrics"
 
 	// import known versions
 	_ "k8s.io/client-go/kubernetes"
@@ -119,6 +120,8 @@ func NewGarbageCollector(
 		ignoredResources: ignoredResources,
 	}
 
+	metrics.Register()
+
 	return gc, nil
 }
 
@@ -182,6 +185,7 @@ func (gc *GarbageCollector) Sync(discoveryClient discovery.ServerResourcesInterf
 		// This can occur if there is an internal error in GetDeletableResources.
 		if len(newResources) == 0 {
 			klog.V(2).Infof("no resources reported by discovery, skipping garbage collector sync")
+			metrics.GarbageCollectorResourcesSyncError.WithLabelValues("resource_discovery_failure").Inc()
 			return
 		}
 
@@ -206,6 +210,7 @@ func (gc *GarbageCollector) Sync(discoveryClient discovery.ServerResourcesInterf
 				newResources = GetDeletableResources(discoveryClient)
 				if len(newResources) == 0 {
 					klog.V(2).Infof("no resources reported by discovery (attempt %d)", attempt)
+					metrics.GarbageCollectorResourcesSyncError.WithLabelValues("resource_discovery_failure").Inc()
 					return false, nil
 				}
 			}
@@ -229,6 +234,7 @@ func (gc *GarbageCollector) Sync(discoveryClient discovery.ServerResourcesInterf
 			// attempt.
 			if err := gc.resyncMonitors(newResources); err != nil {
 				utilruntime.HandleError(fmt.Errorf("failed to sync resource monitors (attempt %d): %v", attempt, err))
+				metrics.GarbageCollectorResourcesSyncError.WithLabelValues("resource_monitors_resync_failure").Inc()
 				return false, nil
 			}
 			klog.V(4).Infof("resynced monitors")
@@ -240,6 +246,7 @@ func (gc *GarbageCollector) Sync(discoveryClient discovery.ServerResourcesInterf
 			// note that workers stay paused until we successfully resync.
 			if !cache.WaitForNamedCacheSync("garbage collector", waitForStopOrTimeout(stopCh, period), gc.dependencyGraphBuilder.IsSynced) {
 				utilruntime.HandleError(fmt.Errorf("timed out waiting for dependency graph builder sync during GC sync (attempt %d)", attempt))
+				metrics.GarbageCollectorResourcesSyncError.WithLabelValues("resource_monitors_resync_failure").Inc()
 				return false, nil
 			}
 
