@@ -18,6 +18,7 @@ package deployment
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"sync"
@@ -449,4 +450,29 @@ func (d *deploymentTester) checkDeploymentStatusReplicasFields(replicas, updated
 		return fmt.Errorf("unexpected .replicas: expect %d, got %d", unavailableReplicas, deployment.Status.UnavailableReplicas)
 	}
 	return nil
+}
+
+func (d *deploymentTester) waitForPodsWithCondition(condType v1.PodConditionType, numberOfPods int, isPodConditionValid func(*v1.PodCondition) bool) error {
+	err := wait.PollImmediate(pollInterval, pollTimeout, func() (bool, error) {
+		pods, err := d.listUpdatedPods()
+		if err != nil {
+			return false, err
+		}
+		if len(pods) != numberOfPods {
+			return false, nil
+		}
+		for _, pod := range pods {
+			_, cond := podutil.GetPodCondition(&pod.Status, condType)
+			if cond == nil || !isPodConditionValid(cond) {
+				return false, nil
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		pods, _ := d.listUpdatedPods()
+		debugPods, _ := json.MarshalIndent(pods, "", "  ")
+		fmt.Printf("pods: %v\n", string(debugPods))
+	}
+	return err
 }

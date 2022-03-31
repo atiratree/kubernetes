@@ -18,9 +18,27 @@ package deployment
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
+	clientgoinformers "k8s.io/client-go/informers"
+	clientset "k8s.io/client-go/kubernetes"
+	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/events"
+	"k8s.io/klog/v2"
+	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
+	"k8s.io/kubernetes/pkg/controller/deployment"
+	"k8s.io/kubernetes/pkg/controller/replicaset"
+	scheduler2 "k8s.io/kubernetes/pkg/scheduler"
+	"k8s.io/kubernetes/pkg/scheduler/profile"
+	"math/rand"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	apps "k8s.io/api/apps/v1"
 	"k8s.io/api/core/v1"
@@ -1273,5 +1291,296 @@ func TestReplicaSetOrphaningAndAdoptionWhenLabelsChange(t *testing.T) {
 		return controllerRef != nil && controllerRef.UID == tester.deployment.UID, nil
 	}); err != nil {
 		t.Fatalf("failed waiting for replicaset adoption by deployment %q to complete: %v", deploymentName, err)
+	}
+}
+
+func dcSetupWithScheduler(t *testing.T) (*httptest.Server, framework.CloseFunc, *replicaset.ReplicaSetController, *deployment.DeploymentController, *scheduler2.Scheduler, clientgoinformers.SharedInformerFactory, dynamicinformer.DynamicSharedInformerFactory, clientset.Interface) {
+	s, closeFn, rm, dc, informers, c := dcSetup(t)
+
+	config := restclient.Config{Host: s.URL}
+	// 1. Create scheduler2
+	dynClient := dynamic.NewForConfigOrDie(&config)
+	dynInformerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynClient, 0, v1.NamespaceAll, nil)
+
+	var err error
+	eventBroadcaster := events.NewBroadcaster(&events.EventSinkImpl{
+		Interface: c.EventsV1(),
+	})
+
+	stopCh := make(chan struct{})
+	closeFnWithScheduler := func() {
+		if closeFn != nil {
+			closeFn()
+		}
+		close(stopCh)
+		s.Close()
+	}
+
+	scheduler, err := scheduler2.New(
+		c,
+		informers,
+		dynInformerFactory,
+		profile.NewRecorderFactory(eventBroadcaster),
+		stopCh,
+		scheduler2.WithKubeConfig(&config),
+	)
+
+	if err != nil {
+		t.Fatalf("Couldn't create scheduler2: %v", err)
+	}
+
+	eventBroadcaster.StartRecordingToSink(stopCh)
+
+	return s, closeFnWithScheduler, rm, dc, scheduler, informers, dynInformerFactory, c
+}
+
+func TestPodAntiAffinityScheduling(t *testing.T) {
+	s, closeFn, rm, dc, scheduler, informers, dynInformers, c := dcSetupWithScheduler(t)
+	defer closeFn()
+	name := "test-pod-anti-affinity-scheduling"
+	ns := framework.CreateTestingNamespace(name, s, t)
+	defer framework.DeleteTestingNamespace(ns, s, t)
+
+	// Start informers and controllers
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	informers.Start(stopCh)
+	dynInformers.Start(stopCh)
+	// TODO need sync for dynamic and informers?
+	informers.WaitForCacheSync(stopCh)
+	dynInformers.WaitForCacheSync(stopCh)
+	go rm.Run(context.TODO(), 5)
+	go dc.Run(context.TODO(), 5)
+	go scheduler.Run(context.TODO())
+
+	// Config
+	parallel := true
+	testWorkers := 10
+	end := time.Now().Add(15 * time.Minute)
+
+	// Parallel
+	if parallel {
+		_, err := c.CoreV1().Nodes().Create(context.TODO(), podAntiAffinityNode, metav1.CreateOptions{})
+		if err != nil {
+			t.Fatalf("failed to create test node: %v", err)
+		}
+	}
+
+	for i := 1; time.Now().Before(end); i++ {
+		if parallel {
+			var wg sync.WaitGroup
+			for w := 0; w < testWorkers; w++ {
+				wg.Add(1)
+				go runPodAntiAffinityTest(&wg, stopCh, i, t, c, ns.Name, true)
+				i++
+			}
+			wg.Wait()
+			select {
+			case <-stopCh:
+				break
+			default:
+			}
+		} else {
+			runPodAntiAffinityTest(nil, nil, i, t, c, ns.Name, false)
+		}
+	}
+}
+
+func runPodAntiAffinityTest(wg *sync.WaitGroup, stopCh chan struct{}, iteration int, t *testing.T, c clientset.Interface, ns string, parallel bool) {
+	if wg != nil {
+		defer wg.Done()
+	}
+	var err error
+	deploymentName := fmt.Sprintf("pod-anti-affinity-deployment-%d", iteration)
+	replicas := rand.Intn(5) + 2
+	fmt.Printf("[%v] iteration %d, replicas %d\n", deploymentName, iteration, replicas)
+	defer func() {
+		select {
+		case <-stopCh:
+			fmt.Printf("[%v] iteration %d failed\n", deploymentName, iteration)
+		default:
+			fmt.Printf("[%v] iteration %d finished\n", deploymentName, iteration)
+		}
+	}()
+
+	tester := &deploymentTester{t: t, c: c, deployment: newDeployment(deploymentName, ns, int32(replicas))}
+	setupPodAntiAffinity(tester, iteration)
+
+	tester.deployment, err = c.AppsV1().Deployments(ns).Create(context.TODO(), tester.deployment, metav1.CreateOptions{})
+	if err != nil {
+		close(stopCh)
+		t.Fatalf("failed to create deployment %q: %v", deploymentName, err)
+	}
+
+	// Wait for the Deployment to be updated to revision 1
+	if err := tester.waitForDeploymentRevisionAndImage("1", fakeImage); err != nil {
+		close(stopCh)
+		t.Fatal(err)
+	}
+
+	if !parallel {
+		err = tester.waitForPodsWithCondition(v1.PodScheduled, replicas, func(condition *v1.PodCondition) bool {
+			return condition.Status == v1.ConditionFalse && condition.Reason == v1.PodReasonUnschedulable && strings.Contains(condition.Message, "no nodes available")
+		})
+		if err != nil {
+			close(stopCh)
+			t.Fatalf("failed to wait for pods with PodScheduled condition of %q deployment: %v", deploymentName, err)
+		}
+
+		_, err = c.CoreV1().Nodes().Create(context.TODO(), podAntiAffinityNode, metav1.CreateOptions{})
+		if err != nil {
+			close(stopCh)
+			t.Fatalf("failed to create test node: %v", err)
+		}
+	}
+
+	err = tester.waitForPodsWithCondition(v1.PodScheduled, replicas, func(condition *v1.PodCondition) bool {
+		return condition.Status == v1.ConditionTrue || (condition.Status == v1.ConditionFalse && condition.Reason == v1.PodReasonUnschedulable && strings.Contains(condition.Message, "nodes are available"))
+	})
+	if err != nil {
+		close(stopCh)
+		t.Fatalf("failed to wait for pods with PodScheduled condition of %q deployment: %v", deploymentName, err)
+	}
+
+	pods, err := tester.listUpdatedPods()
+	if err != nil {
+		close(stopCh)
+		t.Fatalf("failed to list pods of deployment %q: %v", deploymentName, err)
+	}
+
+	scheduled := 0
+	unscheduled := 0
+	for _, pod := range pods {
+		_, cond := podutil.GetPodCondition(&pod.Status, v1.PodScheduled)
+		if cond != nil && cond.Status == v1.ConditionTrue {
+			scheduled += 1
+		} else if cond != nil && cond.Status == v1.ConditionFalse {
+			unscheduled += 1
+		}
+	}
+
+	if scheduled != 1 || unscheduled != replicas-1 {
+		debugPods, _ := json.MarshalIndent(pods, "", "  ")
+		fmt.Printf("pods: %v\n", string(debugPods))
+		deployment, _ := c.AppsV1().Deployments(ns).Get(context.TODO(), deploymentName, metav1.GetOptions{})
+		debugDeployment, _ := json.MarshalIndent(deployment, "", "  ")
+		fmt.Printf("deployment: %v\n", string(debugDeployment))
+		close(stopCh)
+		t.Fatalf("[%v] iteration expected only 1 scheduled pod on a node but detected scheduled=%v, unscheduled=%v, replicas=%v", iteration, scheduled, unscheduled, replicas)
+	}
+
+	noGrace := int64(0)
+	err = c.AppsV1().Deployments(ns).Delete(context.TODO(), tester.deployment.Name, metav1.DeleteOptions{})
+	if err != nil {
+		klog.Errorf("Error deleting deployment: %v", err)
+	}
+
+	for _, pod := range pods {
+		_ = c.AppsV1().ReplicaSets(ns).Delete(context.TODO(), pod.OwnerReferences[0].Name, metav1.DeleteOptions{GracePeriodSeconds: &noGrace})
+		err = c.CoreV1().Pods(ns).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{GracePeriodSeconds: &noGrace})
+		if err != nil {
+			klog.Errorf("Error deleting pods: %v", err)
+		}
+	}
+
+	if !parallel {
+		if err := c.CoreV1().Nodes().DeleteCollection(context.TODO(), metav1.DeleteOptions{GracePeriodSeconds: &noGrace}, metav1.ListOptions{}); err != nil {
+			klog.Errorf("Error deleting node: %v", err)
+		}
+	}
+}
+
+var (
+	podAntiAffinityNode = &v1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-pod-anti-affinity-node",
+			Labels: map[string]string{
+				"kubernetes.io/hostname":        "test-pod-anti-affinity-node.compute",
+				"topology.kubernetes.io/region": "eu-west-3",
+				"topology.kubernetes.io/zone":   "eu-west-3a",
+			},
+		},
+		Status: v1.NodeStatus{
+			Capacity: v1.ResourceList{
+				v1.ResourcePods:   *resource.NewQuantity(110, resource.DecimalSI),
+				v1.ResourceCPU:    resource.MustParse("4"),
+				v1.ResourceMemory: resource.MustParse("32Gi"),
+			},
+			Phase: v1.NodeRunning,
+			Conditions: []v1.NodeCondition{
+				{Type: v1.NodeReady, Status: v1.ConditionTrue},
+			},
+		},
+	}
+)
+
+func setupPodAntiAffinity(tester *deploymentTester, iteration int) {
+	testKeyA, testValueA := "blue.dust/test-key-a", fmt.Sprintf("value-a-%d", iteration)
+	testKeyB, testValueB := "blue.dust/test-key-b", fmt.Sprintf("value-b-%d", iteration)
+	tester.deployment.Spec.Template.Labels[testKeyA] = testValueA
+	tester.deployment.Spec.Template.Labels[testKeyB] = testValueB
+
+	tester.deployment.Spec.Selector.MatchLabels[testKeyA] = testValueA
+
+	tester.deployment.Spec.Template.Spec.Affinity = &v1.Affinity{
+		PodAntiAffinity: &v1.PodAntiAffinity{
+			PreferredDuringSchedulingIgnoredDuringExecution: []v1.WeightedPodAffinityTerm{
+				{
+					Weight: 100,
+					PodAffinityTerm: v1.PodAffinityTerm{
+						TopologyKey: "kubernetes.io/hostname",
+						LabelSelector: &metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      testKeyA,
+									Operator: metav1.LabelSelectorOpIn,
+									Values:   []string{testValueA},
+								},
+								{
+									Key:      testKeyB,
+									Operator: metav1.LabelSelectorOpNotIn,
+									Values:   []string{testValueB},
+								},
+							},
+						},
+					},
+				},
+			},
+			RequiredDuringSchedulingIgnoredDuringExecution: []v1.PodAffinityTerm{
+				{
+					TopologyKey: "kubernetes.io/hostname",
+					LabelSelector: &metav1.LabelSelector{
+						MatchExpressions: []metav1.LabelSelectorRequirement{
+							{
+								Key:      testKeyA,
+								Operator: metav1.LabelSelectorOpIn,
+								Values:   []string{testValueA},
+							},
+							{
+								Key:      testKeyB,
+								Operator: metav1.LabelSelectorOpIn,
+								Values:   []string{testValueB},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	tester.deployment.Spec.Template.Spec.TopologySpreadConstraints = []v1.TopologySpreadConstraint{
+		{
+			LabelSelector: &metav1.LabelSelector{
+				MatchExpressions: []metav1.LabelSelectorRequirement{
+					{
+						Key:      testKeyB,
+						Operator: metav1.LabelSelectorOpIn,
+						Values:   []string{testValueB},
+					},
+				},
+			},
+			MaxSkew:           1,
+			TopologyKey:       "topology.kubernetes.io/zone",
+			WhenUnsatisfiable: v1.ScheduleAnyway,
+		},
 	}
 }
