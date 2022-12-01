@@ -1005,18 +1005,18 @@ func TestAvailableReplicasWithUnstableReadyCondition(t *testing.T) {
 			expectedAvailable: func(runDuration time.Duration, minReadySeconds int) (expectedAvailable sets.Set[int32], done bool) {
 				thirdPodStartDelay := 2 * time.Second // same value used in setupPods
 				skewDelay := 1 * time.Second
-				transitionTime := 1 * time.Second
+				transitionTime := 500 * time.Millisecond
 				waitForTransition := skewDelay + transitionTime
 				secondPodTimeoutToAvailable := time.Duration(minReadySeconds)*time.Second - thirdPodStartDelay
 				thirdPodTimeoutToAvailable := time.Duration(minReadySeconds) * time.Second
 				switch {
-				// (0, 2)
+				// (0, 3)
 				case runDuration < secondPodTimeoutToAvailable:
 					expectedAvailable = sets.New[int32](0)
-				// [2, 4]
+				// [3, 4.5]
 				case runDuration <= secondPodTimeoutToAvailable+waitForTransition:
 					expectedAvailable = sets.New[int32](0, 1) // transition
-				// (4, 5)
+				// (4.5, 5)
 				case runDuration < thirdPodTimeoutToAvailable:
 					expectedAvailable = sets.New[int32](1) // transition complete
 				// [5, 7]
