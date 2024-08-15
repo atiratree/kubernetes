@@ -19,10 +19,7 @@ var (
 			`\[FeatureGate:SELinuxMount\]`,
 			`\[Feature:RelaxedEnvironmentVariableValidation\]`,
 			`\[Feature:UserNamespacesPodSecurityStandards\]`,
-			`\[Feature:Traffic Distribution\]`,
-			`\[Feature:UserNamespacesSupport\]`,
 			`\[Feature:DynamicResourceAllocation\]`,
-			`\[Feature:GPUUpgrade\]`,
 		},
 		// tests for features that are not implemented in openshift
 		"[Disabled:Unimplemented]": {
