@@ -150,6 +150,9 @@ var (
 
 			// https://issues.redhat.com/browse/OCPBUGS-34594
 			`\[sig-node\] \[Feature:PodLifecycleSleepAction\] when create a pod with lifecycle hook using sleep action valid prestop hook using sleep action`,
+
+			// https://issues.redhat.com/browse/OCPBUGS-38839
+			`\[sig-network\] \[Feature:Traffic Distribution\] when Service has trafficDistribution=PreferClose should route traffic to an endpoint that is close to the client`,
 		},
 		// tests that need to be temporarily disabled while the rebase is in progress.
 		"[Disabled:RebaseInProgress]": {
