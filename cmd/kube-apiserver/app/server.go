@@ -119,6 +119,10 @@ cluster's shared state through which all other components interact.`,
 				if err := cmd.ParseFlags(args); err != nil {
 					return err
 				}
+				// initialize feature gates again with the new flags
+				if err := utilversion.DefaultComponentGlobalsRegistry.Set(); err != nil {
+					return err
+				}
 
 				// print merged flags (merged from OpenshiftConfig)
 				cliflag.PrintFlags(cmd.Flags())
