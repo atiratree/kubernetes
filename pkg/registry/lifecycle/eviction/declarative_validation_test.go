@@ -27,13 +27,12 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
 	apitesting "k8s.io/kubernetes/pkg/api/testing"
-	"k8s.io/kubernetes/pkg/apis/coordination"
+	"k8s.io/kubernetes/pkg/apis/lifecycle"
 	utilsclock "k8s.io/utils/clock"
 	testing2 "k8s.io/utils/clock/testing"
-	"k8s.io/utils/ptr"
 
 	// Ensure all API groups are registered with the scheme
-	_ "k8s.io/kubernetes/pkg/apis/coordination/install"
+	_ "k8s.io/kubernetes/pkg/apis/lifecycle/install"
 )
 
 const validUID = "a2ee91f4-e13c-44db-9edc-4240e7383ab9"
@@ -49,7 +48,7 @@ func TestDeclarativeValidate(t *testing.T) {
 
 func testDeclarativeValidate(t *testing.T, apiVersion string) {
 	testCases := map[string]struct {
-		input  *coordination.Eviction
+		input  *lifecycle.Eviction
 		errors field.ErrorList
 	}{
 		"missing target": {
@@ -87,7 +86,7 @@ func testDeclarativeValidate(t *testing.T, apiVersion string) {
 	for k, tc := range testCases {
 		t.Run(k, func(t *testing.T) {
 			ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
-				APIGroup:          "coordination.k8s.io",
+				APIGroup:          "lifecycle.k8s.io",
 				APIVersion:        apiVersion,
 				Resource:          "evictions",
 				IsResourceRequest: true,
@@ -110,8 +109,8 @@ func TestDeclarativeValidateUpdate(t *testing.T) {
 
 func testDeclarativeValidateUpdate(t *testing.T, apiVersion string) {
 	testCases := map[string]struct {
-		input    *coordination.Eviction
-		oldInput *coordination.Eviction
+		input    *lifecycle.Eviction
+		oldInput *lifecycle.Eviction
 		errors   field.ErrorList
 	}{
 		"clear target": {
@@ -142,7 +141,7 @@ func testDeclarativeValidateUpdate(t *testing.T, apiVersion string) {
 			tc.oldInput.ResourceVersion = "0"
 			tc.input.ResourceVersion = "1"
 			ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
-				APIGroup:          "coordination.k8s.io",
+				APIGroup:          "lifecycle.k8s.io",
 				APIVersion:        apiVersion,
 				Resource:          "evictions",
 				IsResourceRequest: true,
@@ -170,8 +169,8 @@ func testDeclarativeValidateStatusUpdate(t *testing.T, apiVersion string) {
 	}
 
 	testCases := map[string]struct {
-		input    *coordination.EvictionStatus
-		oldInput *coordination.EvictionStatus
+		input    *lifecycle.EvictionStatus
+		oldInput *lifecycle.EvictionStatus
 		errors   field.ErrorList
 	}{
 		// conditions
@@ -184,37 +183,37 @@ func testDeclarativeValidateStatusUpdate(t *testing.T, apiVersion string) {
 		},
 		"duplicate condition": {
 			oldInput: mkValidEvictionStatus(0),
-			input:    mkValidEvictionStatus(1, addCondition(clock, coordination.EvictionConditionTargetEvicted, true), addCondition(clock, coordination.EvictionConditionTargetEvicted, true)),
+			input:    mkValidEvictionStatus(1, addCondition(clock, lifecycle.EvictionConditionTargetEvicted, true), addCondition(clock, lifecycle.EvictionConditionTargetEvicted, true)),
 			errors: []*field.Error{
 				field.Duplicate(field.NewPath("status", "conditions").Index(1), ""),
 			},
 		},
 		// observedGeneration
 		"decrease generation to 0": {
-			oldInput: mkValidEvictionStatus(0, setObservedGeneration(ptr.To[int64](7))),
-			input:    mkValidEvictionStatus(0, setObservedGeneration(ptr.To[int64](0))),
+			oldInput: mkValidEvictionStatus(0, setObservedGeneration(new(int64(7)))),
+			input:    mkValidEvictionStatus(0, setObservedGeneration(new(int64(0)))),
 			errors: []*field.Error{
 				field.Invalid(field.NewPath("status", "observedGeneration"), -1, "").WithOrigin("minimum"),
 			},
 		},
 		"decrease generation to negative": {
-			oldInput: mkValidEvictionStatus(0, setObservedGeneration(ptr.To[int64](5))),
-			input:    mkValidEvictionStatus(0, setObservedGeneration(ptr.To[int64](-1))),
+			oldInput: mkValidEvictionStatus(0, setObservedGeneration(new(int64(5)))),
+			input:    mkValidEvictionStatus(0, setObservedGeneration(new(int64(-1)))),
 			errors: []*field.Error{
 				field.Invalid(field.NewPath("status", "observedGeneration"), -1, "").WithOrigin("minimum"),
 			},
 		},
 		// requesters
 		"add a duplicate requesters": {
-			oldInput: mkValidEvictionStatus(0, addRequesters(coordination.RequesterIntentEviction, "foo.example.com/baz")),
-			input:    mkValidEvictionStatus(0, addRequesters(coordination.RequesterIntentEviction, "foo.example.com/baz", "foo.example.com/baz")),
+			oldInput: mkValidEvictionStatus(0, addRequesters(lifecycle.RequesterIntentEviction, "foo.example.com/baz")),
+			input:    mkValidEvictionStatus(0, addRequesters(lifecycle.RequesterIntentEviction, "foo.example.com/baz", "foo.example.com/baz")),
 			errors: field.ErrorList{
 				field.Duplicate(field.NewPath("status", "requesters").Index(1), ""),
 			},
 		},
 		"add a requester without a name": {
 			oldInput: mkValidEvictionStatus(0),
-			input:    mkValidEvictionStatus(0, addRequesters(coordination.RequesterIntentEviction, "")),
+			input:    mkValidEvictionStatus(0, addRequesters(lifecycle.RequesterIntentEviction, "")),
 			errors: field.ErrorList{
 				field.Required(field.NewPath("status", "requesters").Index(0).Child("name"), ""),
 			},
@@ -230,22 +229,22 @@ func testDeclarativeValidateStatusUpdate(t *testing.T, apiVersion string) {
 			oldInput: mkValidEvictionStatus(0),
 			input:    mkValidEvictionStatus(0, addRequesters("Invalid", "foo.example.com/bar")),
 			errors: field.ErrorList{
-				field.NotSupported(field.NewPath("status", "requesters").Index(0).Child("intent"), "", []coordination.RequesterIntent{coordination.RequesterIntentEviction, coordination.RequesterIntentWithdrawn}),
+				field.NotSupported(field.NewPath("status", "requesters").Index(0).Child("intent"), "", []lifecycle.RequesterIntent{lifecycle.RequesterIntentEviction, lifecycle.RequesterIntentWithdrawn}),
 			},
 		},
 		"change to a duplicate requester": {
-			oldInput: mkValidEvictionStatus(0, addRequesters(coordination.RequesterIntentEviction, "foo.example.com/baz", "foo.example.com/bay")),
-			input:    mkValidEvictionStatus(0, addRequesters(coordination.RequesterIntentEviction, "foo.example.com/baz", "foo.example.com/baz")),
+			oldInput: mkValidEvictionStatus(0, addRequesters(lifecycle.RequesterIntentEviction, "foo.example.com/baz", "foo.example.com/bay")),
+			input:    mkValidEvictionStatus(0, addRequesters(lifecycle.RequesterIntentEviction, "foo.example.com/baz", "foo.example.com/baz")),
 			errors: field.ErrorList{
 				field.Duplicate(field.NewPath("status", "requesters").Index(1), ""),
 				field.Invalid(field.NewPath("status", "requesters"), "", "requesters cannot be removed").MarkFromImperative(),
 			},
 		},
 		"change a valid requester to an invalid one": {
-			oldInput: mkValidEvictionStatus(0, addRequesters(coordination.RequesterIntentEviction, "foo.example.com/baz")),
+			oldInput: mkValidEvictionStatus(0, addRequesters(lifecycle.RequesterIntentEviction, "foo.example.com/baz")),
 			input:    mkValidEvictionStatus(0, addRequesters("Invalid", "foo.example.com/baz")),
 			errors: field.ErrorList{
-				field.NotSupported(field.NewPath("status", "requesters").Index(0).Child("intent"), "", []coordination.RequesterIntent{coordination.RequesterIntentEviction, coordination.RequesterIntentWithdrawn}),
+				field.NotSupported(field.NewPath("status", "requesters").Index(0).Child("intent"), "", []lifecycle.RequesterIntent{lifecycle.RequesterIntentEviction, lifecycle.RequesterIntentWithdrawn}),
 			},
 		},
 		// targetResponders and responders
@@ -260,7 +259,7 @@ func testDeclarativeValidateStatusUpdate(t *testing.T, apiVersion string) {
 		},
 		"required targetResponder and responder name": {
 			oldInput: mkValidEvictionStatus(0),
-			input:    mkValidEvictionStatus(0, addTargetResponders(""), setStateFor(coordination.ResponderStateActive, 0), addStatusResponders("")),
+			input:    mkValidEvictionStatus(0, addTargetResponders(""), setStateFor(lifecycle.ResponderStateActive, 0), addStatusResponders("")),
 			errors: []*field.Error{
 				field.Invalid(field.NewPath("status", "responders"), "", "must be the same length as status.targetResponders and contain the same keys in the same order").MarkFromImperative(), // triggered by fallback to oldTargetResponders
 				field.Required(field.NewPath("status", "targetResponders").Index(0).Child("name"), ""),
@@ -369,7 +368,7 @@ func testDeclarativeValidateStatusUpdate(t *testing.T, apiVersion string) {
 			strategy := NewStatusStrategy(NewStrategy(clock))
 
 			ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
-				APIGroup:          "coordination.k8s.io",
+				APIGroup:          "lifecycle.k8s.io",
 				APIVersion:        apiVersion,
 				Resource:          "evictions",
 				IsResourceRequest: true,
@@ -381,12 +380,12 @@ func testDeclarativeValidateStatusUpdate(t *testing.T, apiVersion string) {
 	}
 }
 
-func mkValidEviction(tweaks ...func(obj *coordination.Eviction)) *coordination.Eviction {
-	obj := coordination.Eviction{
+func mkValidEviction(tweaks ...func(obj *lifecycle.Eviction)) *lifecycle.Eviction {
+	obj := lifecycle.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Name: "evict-pod-1-foo.pod", Namespace: "foo"},
-		Spec: coordination.EvictionSpec{
-			Target: coordination.EvictionTarget{
-				Pod: &coordination.EvictionPodReference{
+		Spec: lifecycle.EvictionSpec{
+			Target: lifecycle.EvictionTarget{
+				Pod: &lifecycle.EvictionPodReference{
 					UID:  validUID,
 					Name: "foo.pod",
 				},
@@ -399,15 +398,15 @@ func mkValidEviction(tweaks ...func(obj *coordination.Eviction)) *coordination.E
 	return &obj
 }
 
-func clearTarget() func(obj *coordination.Eviction) {
-	return func(obj *coordination.Eviction) {
+func clearTarget() func(obj *lifecycle.Eviction) {
+	return func(obj *lifecycle.Eviction) {
 		obj.Spec.Target.Pod = nil
 	}
 }
 
-func setTarget(name, uid string) func(obj *coordination.Eviction) {
-	return func(obj *coordination.Eviction) {
-		obj.Spec.Target.Pod = &coordination.EvictionPodReference{
+func setTarget(name, uid string) func(obj *lifecycle.Eviction) {
+	return func(obj *lifecycle.Eviction) {
+		obj.Spec.Target.Pod = &lifecycle.EvictionPodReference{
 			UID:  apimachinerytypes.UID(uid),
 			Name: name,
 		}
@@ -417,28 +416,28 @@ func setTarget(name, uid string) func(obj *coordination.Eviction) {
 func responderName(i int) string {
 	return fmt.Sprintf("responder.example.com/bar%d", i)
 }
-func mkValidEvictionStatus(responders int, tweaks ...func(obj *coordination.EvictionStatus)) *coordination.EvictionStatus {
+func mkValidEvictionStatus(responders int, tweaks ...func(obj *lifecycle.EvictionStatus)) *lifecycle.EvictionStatus {
 	return mkValidEvictionStatusWithStatuses(responders, responders, tweaks...)
 }
-func mkValidEvictionStatusWithStatuses(responders, statuses int, tweaks ...func(obj *coordination.EvictionStatus)) *coordination.EvictionStatus {
-	obj := coordination.EvictionStatus{
-		ObservedGeneration: ptr.To[int64](1),
+func mkValidEvictionStatusWithStatuses(responders, statuses int, tweaks ...func(obj *lifecycle.EvictionStatus)) *lifecycle.EvictionStatus {
+	obj := lifecycle.EvictionStatus{
+		ObservedGeneration: new(int64(1)),
 	}
 	for i := range responders {
-		obj.TargetResponders = append(obj.TargetResponders, coordination.TargetResponder{
+		obj.TargetResponders = append(obj.TargetResponders, lifecycle.TargetResponder{
 			Name:  responderName(i),
-			State: coordination.ResponderStateInactive,
+			State: lifecycle.ResponderStateInactive,
 		})
 		if i == 0 {
-			obj.TargetResponders[i].State = coordination.ResponderStateActive
+			obj.TargetResponders[i].State = lifecycle.ResponderStateActive
 		}
 	}
 	for i := range statuses {
-		obj.Responders = append(obj.Responders, coordination.ResponderStatus{
+		obj.Responders = append(obj.Responders, lifecycle.ResponderStatus{
 			Name: responderName(i),
 		})
 		if i == 0 {
-			obj.Responders[i].StartTime = ptr.To(metav1.Now())
+			obj.Responders[i].StartTime = new(metav1.Now())
 		}
 	}
 	for _, tweak := range tweaks {
@@ -446,8 +445,8 @@ func mkValidEvictionStatusWithStatuses(responders, statuses int, tweaks ...func(
 	}
 	return &obj
 }
-func addCondition(clock utilsclock.PassiveClock, name coordination.EvictionConditionType, status bool) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func addCondition(clock utilsclock.PassiveClock, name lifecycle.EvictionConditionType, status bool) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		newCond := metav1.Condition{
 			Type:               string(name),
 			Status:             metav1.ConditionFalse,
@@ -460,75 +459,76 @@ func addCondition(clock utilsclock.PassiveClock, name coordination.EvictionCondi
 		obj.Conditions = append(obj.Conditions, newCond)
 	}
 }
-func addConditionsCount(clock utilsclock.PassiveClock, count int) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func addConditionsCount(clock utilsclock.PassiveClock, count int) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for i := range count {
-			addCondition(clock, coordination.EvictionConditionType(fmt.Sprintf("Condition%d", i)), true)(obj)
+			addCondition(clock, lifecycle.EvictionConditionType(fmt.Sprintf("Condition%d", i)), true)(obj)
 		}
 	}
 }
 
-func setObservedGeneration(generation *int64) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func setObservedGeneration(generation *int64) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		obj.ObservedGeneration = generation
 	}
 }
-func addRequesters(intent coordination.RequesterIntent, names ...string) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func addRequesters(intent lifecycle.RequesterIntent, names ...string) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for _, name := range names {
-			obj.Requesters = append(obj.Requesters, coordination.Requester{Name: name, Intent: intent})
+			obj.Requesters = append(obj.Requesters, lifecycle.Requester{Name: name, Intent: intent})
 		}
 	}
 }
-func addTargetResponders(responders ...string) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func addTargetResponders(responders ...string) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for _, name := range responders {
-			obj.TargetResponders = append(obj.TargetResponders, coordination.TargetResponder{Name: name, State: coordination.ResponderStateInactive})
+			obj.TargetResponders = append(obj.TargetResponders, lifecycle.TargetResponder{Name: name, State: lifecycle.ResponderStateInactive})
 		}
 	}
 }
 
-func setStateFor(state coordination.ResponderStateType, idx int) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func setStateFor(state lifecycle.ResponderStateType, idx int) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		obj.TargetResponders[idx].State = state
 	}
 }
 
-func addStatusResponders(responders ...string) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func addStatusResponders(responders ...string) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for _, responder := range responders {
-			obj.Responders = append(obj.Responders, coordination.ResponderStatus{Name: responder})
+			obj.Responders = append(obj.Responders, lifecycle.ResponderStatus{Name: responder})
 		}
 	}
 }
-func setRespondersStartTime(clock utilsclock.PassiveClock, from, to int) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func setRespondersStartTime(clock utilsclock.PassiveClock, from, to int) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for i := from; i < to; i++ {
 			obj.Responders[i].StartTime = &metav1.Time{Time: clock.Now().Add(time.Duration(i) * time.Second)}
 		}
 	}
 }
-func setRespondersHeartBeatTime(clock utilsclock.PassiveClock, from, to int) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func setRespondersHeartBeatTime(clock utilsclock.PassiveClock, from, to int) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for i := from; i < to; i++ {
 			obj.Responders[i].HeartbeatTime = &metav1.Time{Time: clock.Now().Add(time.Duration(i) * time.Second)}
 		}
 	}
 }
-func setRespondersCompletionTime(clock utilsclock.PassiveClock, from, to int) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func setRespondersCompletionTime(clock utilsclock.PassiveClock, from, to int) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for i := from; i < to; i++ {
 			obj.Responders[i].CompletionTime = &metav1.Time{Time: clock.Now().Add(time.Duration(i) * time.Second)}
 		}
 	}
 }
-func setRespondersMessage(from, to int, suffixes ...string) func(obj *coordination.EvictionStatus) {
-	return func(obj *coordination.EvictionStatus) {
+func setRespondersMessage(from, to int, suffixes ...string) func(obj *lifecycle.EvictionStatus) {
+	return func(obj *lifecycle.EvictionStatus) {
 		for i := from; i < to; i++ {
-			obj.Responders[i].Message = fmt.Sprintf("message %d", i)
+			msg := fmt.Sprintf("message %d", i)
 			for _, suffix := range suffixes {
-				obj.Responders[i].Message += suffix
+				msg += suffix
 			}
+			obj.Responders[i].Message = new(msg)
 		}
 	}
 }

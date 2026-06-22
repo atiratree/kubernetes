@@ -14,13 +14,12 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// +k8s:conversion-gen=k8s.io/kubernetes/pkg/apis/coordination
-// +k8s:conversion-gen-external-types=k8s.io/api/coordination/v1alpha1
-// +k8s:defaulter-gen=TypeMeta
-// +k8s:defaulter-gen-input=k8s.io/api/coordination/v1alpha1
-// +k8s:validation-gen=TypeMeta
-// +k8s:validation-gen-input=k8s.io/api/coordination/v1alpha1
+// +k8s:deepcopy-gen=package
+// +k8s:protobuf-gen=package
+// +k8s:openapi-gen=true
+// +k8s:prerelease-lifecycle-gen=true
+// +k8s:openapi-model-package=io.k8s.api.lifecycle.v1alpha1
 
-// +groupName=coordination.k8s.io
+// +groupName=lifecycle.k8s.io
 
 package v1alpha1

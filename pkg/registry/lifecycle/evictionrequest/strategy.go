@@ -29,8 +29,8 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	"k8s.io/kubernetes/pkg/apis/coordination"
-	"k8s.io/kubernetes/pkg/apis/coordination/validation"
+	"k8s.io/kubernetes/pkg/apis/lifecycle"
+	"k8s.io/kubernetes/pkg/apis/lifecycle/validation"
 )
 
 // evictionRequestStrategy is the default logic that applies when creating and updating EvictionRequest objects.
@@ -56,7 +56,7 @@ func (*evictionRequestStrategy) NamespaceScoped() bool {
 // and should not be modified by the user.
 func (*evictionRequestStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
 	fields := map[fieldpath.APIVersion]*fieldpath.Set{
-		"coordination/v1alpha1": fieldpath.NewSet(
+		"lifecycle/v1alpha1": fieldpath.NewSet(
 			fieldpath.MakePathOrDie("status"),
 		),
 	}
@@ -65,15 +65,15 @@ func (*evictionRequestStrategy) GetResetFields() map[fieldpath.APIVersion]*field
 
 // PrepareForCreate clears fields that are not allowed to be set by end users on creation.
 func (*evictionRequestStrategy) PrepareForCreate(ctx context.Context, obj runtime.Object) {
-	evictionRequest := obj.(*coordination.EvictionRequest)
-	evictionRequest.Status = coordination.EvictionRequestStatus{}
+	evictionRequest := obj.(*lifecycle.EvictionRequest)
+	evictionRequest.Status = lifecycle.EvictionRequestStatus{}
 	evictionRequest.Generation = 1
 }
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update.
 func (*evictionRequestStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
-	oldEvictionRequest := old.(*coordination.EvictionRequest)
-	newEvictionRequest := obj.(*coordination.EvictionRequest)
+	oldEvictionRequest := old.(*lifecycle.EvictionRequest)
+	newEvictionRequest := obj.(*lifecycle.EvictionRequest)
 	newEvictionRequest.Status = oldEvictionRequest.Status
 
 	// Spec updates bump the generation.
@@ -84,7 +84,7 @@ func (*evictionRequestStrategy) PrepareForUpdate(ctx context.Context, obj, old r
 
 // Validate validates a new EvictionRequest.
 func (s *evictionRequestStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
-	evictionRequest := obj.(*coordination.EvictionRequest)
+	evictionRequest := obj.(*lifecycle.EvictionRequest)
 
 	allErrs := validation.ValidateEvictionRequest(evictionRequest)
 	return rest.ValidateDeclarativelyWithMigrationChecks(ctx, legacyscheme.Scheme, obj, nil, allErrs, operation.Create, rest.DeclarativeValidationConfig{})
@@ -103,8 +103,8 @@ func (*evictionRequestStrategy) AllowCreateOnUpdate(ctx context.Context) bool {
 // ValidateUpdate is the default update validation for an end user.
 func (s *evictionRequestStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	var allErrs field.ErrorList
-	evictionRequest := obj.(*coordination.EvictionRequest)
-	oldEvictionRequest := old.(*coordination.EvictionRequest)
+	evictionRequest := obj.(*lifecycle.EvictionRequest)
+	oldEvictionRequest := old.(*lifecycle.EvictionRequest)
 
 	allErrs = validation.ValidateEvictionRequestUpdate(evictionRequest, oldEvictionRequest)
 	return rest.ValidateDeclarativelyWithMigrationChecks(ctx, legacyscheme.Scheme, evictionRequest, oldEvictionRequest, allErrs, operation.Update, rest.DeclarativeValidationConfig{})
@@ -135,7 +135,7 @@ func NewStatusStrategy(strategy *evictionRequestStrategy) *evictionRequestStatus
 // and should not be modified by the user.
 func (*evictionRequestStatusStrategy) GetResetFields() map[fieldpath.APIVersion]*fieldpath.Set {
 	return map[fieldpath.APIVersion]*fieldpath.Set{
-		"coordination/v1alpha1": fieldpath.NewSet(
+		"lifecycle/v1alpha1": fieldpath.NewSet(
 			fieldpath.MakePathOrDie("spec"),
 			fieldpath.MakePathOrDie("metadata"),
 		),
@@ -144,8 +144,8 @@ func (*evictionRequestStatusStrategy) GetResetFields() map[fieldpath.APIVersion]
 
 // PrepareForUpdate clears fields that are not allowed to be set by end users on update of status
 func (*evictionRequestStatusStrategy) PrepareForUpdate(ctx context.Context, obj, old runtime.Object) {
-	newEvictionRequest := obj.(*coordination.EvictionRequest)
-	oldEvictionRequest := old.(*coordination.EvictionRequest)
+	newEvictionRequest := obj.(*lifecycle.EvictionRequest)
+	oldEvictionRequest := old.(*lifecycle.EvictionRequest)
 	// Status updates should not include metadata update privileges, also,
 	// the evictionrequest-controller should be responsible for the labels
 	// and not the responders - let's not promote label updates.
@@ -159,7 +159,7 @@ func (*evictionRequestStatusStrategy) AllowCreateOnUpdate(ctx context.Context) b
 
 // ValidateUpdate is the default update validation for an end user updating status
 func (s *evictionRequestStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
-	allErrs := validation.ValidateEvictionRequestStatusUpdate(obj.(*coordination.EvictionRequest), old.(*coordination.EvictionRequest))
+	allErrs := validation.ValidateEvictionRequestStatusUpdate(obj.(*lifecycle.EvictionRequest), old.(*lifecycle.EvictionRequest))
 	return rest.ValidateDeclarativelyWithMigrationChecks(ctx, legacyscheme.Scheme, obj, old, allErrs, operation.Update, rest.DeclarativeValidationConfig{})
 }
 

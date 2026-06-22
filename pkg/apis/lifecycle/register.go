@@ -14,19 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1alpha1
+package lifecycle
 
 import (
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // GroupName is the group name use in this package
-const GroupName = "coordination.k8s.io"
+const GroupName = "lifecycle.k8s.io"
 
 // SchemeGroupVersion is group version used to register these objects
-var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "v1alpha1"}
+var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}
+
+// Kind takes an unqualified kind and returns a Group qualified GroupKind
+func Kind(kind string) schema.GroupKind {
+	return SchemeGroupVersion.WithKind(kind).GroupKind()
+}
 
 // Resource takes an unqualified resource and returns a Group qualified GroupResource
 func Resource(resource string) schema.GroupResource {
@@ -34,14 +38,13 @@ func Resource(resource string) schema.GroupResource {
 }
 
 var (
-	// TODO: move SchemeBuilder with zz_generated.deepcopy.go to k8s.io/api.
-	// localSchemeBuilder and AddToScheme will stay in k8s.io/kubernetes.
-	SchemeBuilder      = runtime.NewSchemeBuilder(addKnownTypes)
-	localSchemeBuilder = &SchemeBuilder
-	AddToScheme        = localSchemeBuilder.AddToScheme
+	// SchemeBuilder points to a list of functions added to Scheme.
+	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
+	// AddToScheme applies all the stored functions to the scheme.
+	AddToScheme = SchemeBuilder.AddToScheme
 )
 
-// Adds the list of known types to api.Scheme.
+// Adds the list of known types to the given scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
 		&Eviction{},
@@ -49,7 +52,5 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&EvictionRequest{},
 		&EvictionRequestList{},
 	)
-
-	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }

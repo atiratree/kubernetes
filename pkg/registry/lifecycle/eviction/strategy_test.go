@@ -20,13 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/structured-merge-diff/v6/fieldpath"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/user"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/kubernetes/pkg/apis/coordination"
+	"k8s.io/kubernetes/pkg/apis/lifecycle"
 	testing2 "k8s.io/utils/clock/testing"
 )
 
@@ -42,7 +41,7 @@ func TestEvictionStrategy_ResetFields(t *testing.T) {
 func TestEvictionStrategy(t *testing.T) {
 	clock := testing2.NewFakePassiveClock(time.Now())
 	ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
-		APIGroup:          "coordination.k8s.io",
+		APIGroup:          "lifecycle.k8s.io",
 		APIVersion:        "v1alpha1",
 		Resource:          "evictions",
 		IsResourceRequest: true,
@@ -63,23 +62,23 @@ func TestEvictionStrategy(t *testing.T) {
 		t.Errorf("Eviction warnings on create are expected to be empty")
 	}
 
-	eviction := &coordination.Eviction{
+	eviction := &lifecycle.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "foo"},
-		Spec: coordination.EvictionSpec{
-			Target: coordination.EvictionTarget{
-				Pod: &coordination.EvictionPodReference{
+		Spec: lifecycle.EvictionSpec{
+			Target: lifecycle.EvictionTarget{
+				Pod: &lifecycle.EvictionPodReference{
 					UID:  validUID,
 					Name: "foo.pod",
 				},
 			},
 		},
-		Status: coordination.EvictionStatus{
-			ObservedGeneration: ptr.To[int64](1),
-			Requesters: []coordination.Requester{
-				{Name: "requester.example.com/bar", Intent: coordination.RequesterIntentEviction},
+		Status: lifecycle.EvictionStatus{
+			ObservedGeneration: new(int64(1)),
+			Requesters: []lifecycle.Requester{
+				{Name: "requester.example.com/bar", Intent: lifecycle.RequesterIntentEviction},
 			},
-			TargetResponders: []coordination.TargetResponder{
-				{Name: "test", State: coordination.ResponderStateInactive},
+			TargetResponders: []lifecycle.TargetResponder{
+				{Name: "test", State: lifecycle.ResponderStateInactive},
 			},
 		},
 	}
@@ -103,7 +102,7 @@ func TestEvictionStrategy(t *testing.T) {
 func TestEvictionStrategy_Update(t *testing.T) {
 	clock := testing2.NewFakePassiveClock(time.Now())
 	ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
-		APIGroup:          "coordination.k8s.io",
+		APIGroup:          "lifecycle.k8s.io",
 		APIVersion:        "v1alpha1",
 		Resource:          "evictions",
 		IsResourceRequest: true,
@@ -116,43 +115,43 @@ func TestEvictionStrategy_Update(t *testing.T) {
 		t.Errorf("Eviction warnings on update are expected to be empty")
 	}
 
-	oldEviction := &coordination.Eviction{
+	oldEviction := &lifecycle.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "foo", Generation: 1, ResourceVersion: "2"},
-		Spec: coordination.EvictionSpec{
-			Target: coordination.EvictionTarget{
-				Pod: &coordination.EvictionPodReference{
+		Spec: lifecycle.EvictionSpec{
+			Target: lifecycle.EvictionTarget{
+				Pod: &lifecycle.EvictionPodReference{
 					UID:  validUID,
 					Name: "foo.pod",
 				},
 			},
 		},
-		Status: coordination.EvictionStatus{
-			ObservedGeneration: ptr.To[int64](1),
-			Requesters: []coordination.Requester{
-				{Name: "requester-1.example.com/bar", Intent: coordination.RequesterIntentEviction},
-				{Name: "requester-2.example.com/bar", Intent: coordination.RequesterIntentWithdrawn},
+		Status: lifecycle.EvictionStatus{
+			ObservedGeneration: new(int64(1)),
+			Requesters: []lifecycle.Requester{
+				{Name: "requester-1.example.com/bar", Intent: lifecycle.RequesterIntentEviction},
+				{Name: "requester-2.example.com/bar", Intent: lifecycle.RequesterIntentWithdrawn},
 			},
 		},
 	}
 
-	newEviction := &coordination.Eviction{
+	newEviction := &lifecycle.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "foo", ResourceVersion: "2"},
-		Spec: coordination.EvictionSpec{
-			Target: coordination.EvictionTarget{
-				Pod: &coordination.EvictionPodReference{
+		Spec: lifecycle.EvictionSpec{
+			Target: lifecycle.EvictionTarget{
+				Pod: &lifecycle.EvictionPodReference{
 					UID:  validUID,
 					Name: "bar.pod",
 				},
 			},
 		},
-		Status: coordination.EvictionStatus{
-			ObservedGeneration: ptr.To[int64](10),
-			Requesters: []coordination.Requester{
-				{Name: "requester-1.example.com/bar", Intent: coordination.RequesterIntentEviction},
-				{Name: "requester-2.example.com/bar", Intent: coordination.RequesterIntentEviction},
+		Status: lifecycle.EvictionStatus{
+			ObservedGeneration: new(int64(10)),
+			Requesters: []lifecycle.Requester{
+				{Name: "requester-1.example.com/bar", Intent: lifecycle.RequesterIntentEviction},
+				{Name: "requester-2.example.com/bar", Intent: lifecycle.RequesterIntentEviction},
 			},
-			TargetResponders: []coordination.TargetResponder{
-				{Name: "test", State: coordination.ResponderStateCanceled},
+			TargetResponders: []lifecycle.TargetResponder{
+				{Name: "test", State: lifecycle.ResponderStateCanceled},
 			},
 		},
 	}
@@ -192,7 +191,7 @@ func TestEvictionStatusStrategy(t *testing.T) {
 	clock := testing2.NewFakePassiveClock(time.Now())
 	strategy := NewStatusStrategy(NewStrategy(clock))
 	ctx := genericapirequest.WithRequestInfo(genericapirequest.NewDefaultContext(), &genericapirequest.RequestInfo{
-		APIGroup:          "coordination.k8s.io",
+		APIGroup:          "lifecycle.k8s.io",
 		APIVersion:        "v1alpha1",
 		Resource:          "evictions",
 		IsResourceRequest: true,
@@ -200,46 +199,46 @@ func TestEvictionStatusStrategy(t *testing.T) {
 		Subresource:       "status",
 	})
 
-	oldEviction := &coordination.Eviction{
+	oldEviction := &lifecycle.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "foo", Generation: 1, ResourceVersion: "2",
 			Annotations: map[string]string{"test": "true"},
 			Labels:      map[string]string{"foo": "bar"}},
-		Spec: coordination.EvictionSpec{
-			Target: coordination.EvictionTarget{
-				Pod: &coordination.EvictionPodReference{
+		Spec: lifecycle.EvictionSpec{
+			Target: lifecycle.EvictionTarget{
+				Pod: &lifecycle.EvictionPodReference{
 					UID:  validUID,
 					Name: "foo.pod",
 				},
 			},
 		},
-		Status: coordination.EvictionStatus{
-			ObservedGeneration: ptr.To[int64](1),
+		Status: lifecycle.EvictionStatus{
+			ObservedGeneration: new(int64(1)),
 		},
 	}
 
-	newEviction := &coordination.Eviction{
+	newEviction := &lifecycle.Eviction{
 		ObjectMeta: metav1.ObjectMeta{Name: "bar", Namespace: "foo", Generation: 1, ResourceVersion: "2",
 			Annotations: map[string]string{"test": "false"},
 			Labels:      map[string]string{"foo": "baz"}},
-		Spec: coordination.EvictionSpec{
-			Target: coordination.EvictionTarget{
-				Pod: &coordination.EvictionPodReference{
+		Spec: lifecycle.EvictionSpec{
+			Target: lifecycle.EvictionTarget{
+				Pod: &lifecycle.EvictionPodReference{
 					UID:  validUID,
 					Name: "foo.update",
 				},
 			},
 		},
-		Status: coordination.EvictionStatus{
-			ObservedGeneration: ptr.To[int64](-5),
-			Requesters: []coordination.Requester{
-				{Name: "requester-1.example.com/bar", Intent: coordination.RequesterIntentEviction},
-				{Name: "requester-2.example.com/bar", Intent: coordination.RequesterIntentEviction},
+		Status: lifecycle.EvictionStatus{
+			ObservedGeneration: new(int64(-5)),
+			Requesters: []lifecycle.Requester{
+				{Name: "requester-1.example.com/bar", Intent: lifecycle.RequesterIntentEviction},
+				{Name: "requester-2.example.com/bar", Intent: lifecycle.RequesterIntentEviction},
 			},
-			TargetResponders: []coordination.TargetResponder{
-				{Name: "responder1.example.com/bar", State: coordination.ResponderStateActive},
+			TargetResponders: []lifecycle.TargetResponder{
+				{Name: "responder1.example.com/bar", State: lifecycle.ResponderStateActive},
 			},
-			Responders: []coordination.ResponderStatus{
-				{Name: "responder1.example.com/bar", Message: "test message", StartTime: ptr.To(metav1.Now())},
+			Responders: []lifecycle.ResponderStatus{
+				{Name: "responder1.example.com/bar", Message: new("test message"), StartTime: new(metav1.Now())},
 			},
 		},
 	}
@@ -258,7 +257,7 @@ func TestEvictionStatusStrategy(t *testing.T) {
 	if len(errs) == 0 {
 		t.Errorf("Expected a validation error")
 	}
-	newEviction.Status.ObservedGeneration = ptr.To[int64](2)
+	newEviction.Status.ObservedGeneration = new(int64(2))
 	errs = strategy.ValidateUpdate(ctx, newEviction, oldEviction)
 	if len(errs) != 0 {
 		t.Errorf("Unexpected error validating %v", errs)
