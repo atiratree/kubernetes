@@ -3066,6 +3066,36 @@
   componentEndpoints:
   - component: kube-apiserver
     endpoint: /metrics
+- name: requester_intent
+  subsystem: evictionrequest_controller
+  help: The intent and target of the EvictionRequest.
+  type: Gauge
+  stabilityLevel: ALPHA
+  labels:
+  - evictionrequest
+  - intent
+  - namespace
+  - requester
+  - target_name
+  - target_type
+  componentEndpoints:
+  - component: kube-controller-manager
+    endpoint: /metrics
+- name: responder_state
+  subsystem: evictionrequest_controller
+  help: The state of each responder for the Eviction.
+  type: Gauge
+  stabilityLevel: ALPHA
+  labels:
+  - eviction
+  - namespace
+  - responder
+  - state
+  - target_name
+  - target_type
+  componentEndpoints:
+  - component: kube-controller-manager
+    endpoint: /metrics
 - name: field_validation_request_duration_seconds
   help: Response latency distribution in seconds for each field validation value
   type: Histogram
