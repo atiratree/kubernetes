@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	lifecycleapply "k8s.io/client-go/applyconfigurations/lifecycle/v1alpha1"
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
+	"k8s.io/utils/ptr"
 )
 
 var _ metav1.ObjectMetaAccessor = &targetInfo{}
@@ -133,6 +134,9 @@ func (t targetInfo) isGone() bool {
 
 // hasSchedulingGroup reports whether the target belongs to a PodGroup.
 func (t targetInfo) hasSchedulingGroup() bool {
+	if t.isGone() {
+		return false
+	}
 	if t.pod != nil {
 		return t.pod.Spec.SchedulingGroup != nil
 	}
@@ -140,17 +144,23 @@ func (t targetInfo) hasSchedulingGroup() bool {
 }
 
 // hasCompleted reports whether the target has reached a terminal lifecycle state.
-func (t targetInfo) isTerminal() bool {
-	if t.pod != nil {
-		return podutil.IsPodTerminal(t.pod)
+func (t targetInfo) isTerminal() *bool {
+	if t.isGone() {
+		return nil
 	}
-	return false
+	if t.pod != nil {
+		return new(podutil.IsPodTerminal(t.pod))
+	}
+	return new(false)
 }
 
 // terminalTime it reports the latest time this target has became terminal.
 func (t targetInfo) terminalTime() *time.Time {
+	if t.isGone() {
+		return nil
+	}
 	var terminalTime *time.Time
-	if t.pod != nil && t.isTerminal() {
+	if t.pod != nil && ptr.Deref(t.isTerminal(), false) {
 		terminalTime = getPodFinishTime(t.pod)
 	}
 	objectMeta := t.GetObjectMeta()
@@ -166,6 +176,9 @@ func (t targetInfo) terminalTime() *time.Time {
 // evictionResponders returns the responders declared on the target, or nil
 // if the target is unavailable.
 func (t targetInfo) evictionResponders(includeDefault bool) []v1.EvictionResponder {
+	if t.isGone() {
+		return nil
+	}
 	if t.pod != nil {
 		responders := append([]v1.EvictionResponder(nil), t.pod.Spec.EvictionResponders...)
 		if includeDefault {

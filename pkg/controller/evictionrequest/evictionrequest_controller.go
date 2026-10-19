@@ -650,7 +650,7 @@ func (c *EvictionRequestController) computeEvictionStatus(ctx context.Context, e
 	switch {
 	case target.isGone():
 		targetIsGone = true
-	case target.isTerminal():
+	case ptr.Deref(target.isTerminal(), false):
 		targetIsTerminal = true
 	case !hasEvictionIntent(requests):
 		evictionIsCanceled = true
@@ -660,6 +660,11 @@ func (c *EvictionRequestController) computeEvictionStatus(ctx context.Context, e
 		c.terminalTimeCache.recordTargetTerminalTime(string(eviction.UID), *terminalTime)
 	}
 	terminalTime := c.terminalTimeCache.getTargetTerminalTime(string(eviction.UID))
+	// Fall back to Now() if the terminal time is missing or in the future, but we have already observed termination.
+	if (targetIsGone || targetIsTerminal) && (terminalTime == nil || terminalTime.After(now)) {
+		terminalTime = new(now)
+		c.terminalTimeCache.recordTargetTerminalTime(string(eviction.UID), *terminalTime)
+	}
 
 	targetResponders, changedBecauseInitialization := getOrInitializeTargetResponders(eviction, target)
 	// Sort responders first, then use ordered progression to simplify the processing.

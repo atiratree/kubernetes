@@ -33,7 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apimachinerytypes "k8s.io/apimachinery/pkg/types"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	lifecycleapplyv1alpha1 "k8s.io/client-go/applyconfigurations/lifecycle/v1alpha1"
+	lifecycleapply "k8s.io/client-go/applyconfigurations/lifecycle/v1alpha1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/ktesting"
 	restclient "k8s.io/client-go/rest"
@@ -93,7 +93,7 @@ func testEvictionRequestValidation(tCtx ktesting.TContext) {
 	for i, tc := range testCases {
 		tCtx.Run(tc.name, func(tCtx ktesting.TContext) {
 			startEvictionRequestController(tCtx)
-			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-responder-skip-processing-%d", i), tCtx)
+			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-eviction-request-validation-%d", i), tCtx)
 			defer framework.DeleteNamespaceOrDie(tCtx.Client(), ns, tCtx)
 			var err error
 
@@ -167,7 +167,7 @@ func testEvictionValidation(tCtx ktesting.TContext) {
 	for i, tc := range testCases {
 		tCtx.Run(tc.name, func(tCtx ktesting.TContext) {
 			startEvictionRequestController(tCtx)
-			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-responder-skip-processing-%d", i), tCtx)
+			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-eviction-validation-%d", i), tCtx)
 			defer framework.DeleteNamespaceOrDie(tCtx.Client(), ns, tCtx)
 			var err error
 
@@ -258,7 +258,7 @@ func testEvictionRequestEvictionProcess(tCtx ktesting.TContext) {
 	for i, tc := range testCases {
 		tCtx.Run(tc.name, func(tCtx ktesting.TContext) {
 			startEvictionRequestController(tCtx)
-			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-responder-skip-processing-%d", i), tCtx)
+			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-eviction-request-processing-%d", i), tCtx)
 			defer framework.DeleteNamespaceOrDie(tCtx.Client(), ns, tCtx)
 			var err error
 
@@ -547,6 +547,125 @@ func testEvictionRequestEvictionProcess(tCtx ktesting.TContext) {
 	}
 }
 
+func TestEvictionTerminalTimeFallback(t *testing.T) {
+	testEvictionTerminalTimeFallback(ktesting.Init(t))
+}
+func testEvictionTerminalTimeFallback(tCtx ktesting.TContext) {
+	featuregatetesting.SetFeatureGatesDuringTest(tCtx, utilfeature.DefaultFeatureGate, featuregatetesting.FeatureOverrides{
+		features.EvictionRequestAPI: true,
+		features.GenericWorkload:    true,
+	})
+	tCtx = apiServerSetup(tCtx)
+
+	testCases := []struct {
+		name               string
+		createPod          bool
+		pod                *v1.Pod
+		expectedConditions []metav1.Condition
+	}{
+		{
+			name:               "pod-gone-no-terminal-time-present",
+			pod:                mkValidPod(""),
+			expectedConditions: evictedConditions(lifecyclev1alpha1.EvictionConditionReasonPodDeleted, "deleted"),
+		},
+		{
+			name:               "pod-present-no-terminal-time-present",
+			pod:                mkValidPod(""),
+			expectedConditions: evictedConditions(lifecyclev1alpha1.EvictionConditionReasonPodTerminal, "terminal"),
+			createPod:          true,
+		},
+	}
+	for i, tc := range testCases {
+		tCtx.Run(tc.name, func(tCtx ktesting.TContext) {
+			ns := framework.CreateNamespaceOrDie(tCtx.Client(), fmt.Sprintf("test-eviction-terminal-time-fallback-%d", i), tCtx)
+			defer framework.DeleteNamespaceOrDie(tCtx.Client(), ns, tCtx)
+			var err error
+
+			pod := tc.pod
+			pod.Namespace = ns.Name
+			if tc.createPod {
+				pod, err = tCtx.Client().CoreV1().Pods(pod.Namespace).Create(tCtx, pod, metav1.CreateOptions{})
+				tCtx.ExpectNoError(err, "create pod")
+				// Don't create the request immediately to prevent a race - so let's just observe it first
+				pod, err = tCtx.Client().CoreV1().Pods(pod.Namespace).Get(tCtx, pod.Name, metav1.GetOptions{})
+				tCtx.ExpectNoError(err, "get pod")
+				pod, err = markPodRunning(tCtx, time.Now(), pod)
+				pod.Status.Phase = v1.PodSucceeded
+				// We can generally depend on the kubelet to set the Terminated container state.
+				// This serves as a broad test to fulfill the generic targetInfo.terminalTime() method behavior.
+				pod, err = tCtx.Client().CoreV1().Pods(pod.Namespace).UpdateStatus(tCtx, pod, metav1.UpdateOptions{})
+				tCtx.ExpectNoError(err, "mark pod succeeded")
+			} else {
+				pod.UID = "539bb197-7e4a-4698-8863-d4bacdb9ecf0"
+			}
+
+			evictionRequest := mkValidEvictionRequest(pod)
+			evictionRequest, err = tCtx.Client().LifecycleV1alpha1().EvictionRequests(evictionRequest.Namespace).Create(tCtx, evictionRequest, metav1.CreateOptions{})
+			tCtx.ExpectNoError(err, "create eviction request")
+			eviction := mkValidEviction(pod)
+			eviction, err = tCtx.Client().LifecycleV1alpha1().Evictions(eviction.Namespace).Create(tCtx, eviction, metav1.CreateOptions{})
+			tCtx.ExpectNoError(err, "create eviction")
+
+			// Simulate the controller reconciliation; initialize responders of the missing pod.
+			statusApply := lifecycleapply.EvictionStatus()
+			targetRespondersApply := lifecycleapply.TargetResponder().
+				WithName(lifecyclev1alpha1.EvictionResponderImperativeEviction).
+				WithState(lifecyclev1alpha1.ResponderStateActive).
+				WithPriority(100)
+			statusApply.WithTargetResponders(targetRespondersApply)
+
+			responderStatusApply := lifecycleapply.ResponderStatus().
+				WithName(lifecyclev1alpha1.EvictionResponderImperativeEviction).
+				WithStartTime(metav1.Now())
+			statusApply.WithResponders(responderStatusApply)
+
+			applyConfig := lifecycleapply.Eviction(eviction.Name, eviction.Namespace).
+				WithStatus(statusApply)
+
+			eviction, err = tCtx.Client().LifecycleV1alpha1().
+				Evictions(eviction.Namespace).
+				ApplyStatus(tCtx, applyConfig, metav1.ApplyOptions{
+					FieldManager: names.EvictionRequestController,
+				})
+			tCtx.ExpectNoError(err, "apply eviction status")
+
+			// Simulate pod deletion race by starting the controller after we have created the eviction request and the eviction.
+			startEvictionRequestController(tCtx)
+
+			expectGeneration := gomega.HaveField("Status.ObservedGeneration", gomega.Equal(new(int64(1))))
+
+			// Check that the controller has accepted the half-baked status and is processing the status updates.
+			tCtx.Eventually(getEviction(eviction)).WithTimeout(controllerResponseTimeout).WithPolling(pollInterval).Should(expectGeneration)
+			// Status should not change for 4-5s (see GracefulCompletionDelay)
+			tCtx.Consistently(getEviction(eviction)).WithTimeout(4 * time.Second).WithPolling(pollInterval).Should(gomega.And(
+				matchExpectedConditions(awaitingConditions()...),
+				expectGeneration),
+			)
+			tCtx.Eventually(getEviction(eviction)).WithTimeout(controllerResponseTimeout).WithPolling(pollInterval).Should(gomega.And(
+				matchExpectedConditions(tc.expectedConditions...),
+				expectGeneration),
+			)
+		})
+	}
+}
+
+func awaitingConditions() []metav1.Condition {
+	return []metav1.Condition{
+		{
+			Type:    string(lifecyclev1alpha1.EvictionConditionFailed),
+			Status:  metav1.ConditionFalse,
+			Reason:  string(lifecyclev1alpha1.EvictionConditionReasonAwaitingEviction),
+			Message: "",
+		},
+		{
+			Type:    string(lifecyclev1alpha1.EvictionConditionTargetEvicted),
+			Status:  metav1.ConditionFalse,
+			Reason:  string(lifecyclev1alpha1.EvictionConditionReasonAwaitingEviction),
+			Message: "",
+		},
+	}
+}
+
 func failedConditions(reason lifecyclev1alpha1.EvictionConditionReason, message string) []metav1.Condition {
 	return []metav1.Condition{
 		{
@@ -656,7 +775,7 @@ func deletePod(tCtx ktesting.TContext, pod *v1.Pod) error {
 }
 
 func markResponderUpdate(tCtx ktesting.TContext, fieldManager string, eviction *lifecyclev1alpha1.Eviction, responderName string, isCompleted bool) (*lifecyclev1alpha1.Eviction, error) {
-	newResponderStatus := lifecycleapplyv1alpha1.ResponderStatus().
+	newResponderStatus := lifecycleapply.ResponderStatus().
 		WithName(responderName).
 		WithHeartbeatTime(metav1.Now()).
 		WithExpectedCompletionTime(metav1.Time{Time: time.Now().Add(time.Hour)}).
@@ -665,8 +784,8 @@ func markResponderUpdate(tCtx ktesting.TContext, fieldManager string, eviction *
 		newResponderStatus.WithCompletionTime(metav1.Now())
 	}
 
-	statusApplyUpdate := lifecycleapplyv1alpha1.Eviction(eviction.Name, eviction.Namespace).
-		WithStatus(lifecycleapplyv1alpha1.EvictionStatus().WithResponders(newResponderStatus))
+	statusApplyUpdate := lifecycleapply.Eviction(eviction.Name, eviction.Namespace).
+		WithStatus(lifecycleapply.EvictionStatus().WithResponders(newResponderStatus))
 	return tCtx.Client().LifecycleV1alpha1().Evictions(eviction.Namespace).ApplyStatus(tCtx, statusApplyUpdate, metav1.ApplyOptions{FieldManager: fieldManager})
 }
 

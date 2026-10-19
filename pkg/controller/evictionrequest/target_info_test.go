@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	lifecycleapply "k8s.io/client-go/applyconfigurations/lifecycle/v1alpha1"
 	testing2 "k8s.io/utils/clock/testing"
+	"k8s.io/utils/ptr"
 )
 
 func TestTargetInfo(t *testing.T) {
@@ -122,6 +123,15 @@ func TestIsPartOfPodGroup(t *testing.T) {
 			expectedHasSchedulingGroup: true,
 		},
 		{
+			name: "pod_gone_but_new_with_PodGroup",
+			target: func() targetInfo {
+				pod := mkValidPod("my-pod", "uid-2")
+				pod.Spec.SchedulingGroup = &v1.PodSchedulingGroup{PodGroupName: new("my-podgroup")}
+				return newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), pod)
+			}(),
+			expectedHasSchedulingGroup: false,
+		},
+		{
 			name:                       "pod_not_found",
 			target:                     newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), nil),
 			expectedHasSchedulingGroup: false,
@@ -140,12 +150,12 @@ func TestIsTerminal(t *testing.T) {
 	testCases := []struct {
 		name               string
 		target             targetInfo
-		expectedIsTerminal bool
+		expectedIsTerminal *bool
 	}{
 		{
 			name:               "running_pod",
 			target:             newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), mkValidPod("my-pod", "uid-1")),
-			expectedIsTerminal: false,
+			expectedIsTerminal: new(false),
 		},
 		{
 			name: "succeeded_pod",
@@ -154,7 +164,7 @@ func TestIsTerminal(t *testing.T) {
 				pod.Status.Phase = v1.PodSucceeded
 				return newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), pod)
 			}(),
-			expectedIsTerminal: true,
+			expectedIsTerminal: new(true),
 		},
 		{
 			name: "failed_pod",
@@ -163,17 +173,17 @@ func TestIsTerminal(t *testing.T) {
 				pod.Status.Phase = v1.PodFailed
 				return newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), pod)
 			}(),
-			expectedIsTerminal: true,
+			expectedIsTerminal: new(true),
 		},
 		{
 			name:               "pod_not_found",
 			target:             newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), nil),
-			expectedIsTerminal: false,
+			expectedIsTerminal: nil,
 		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := tc.target.isTerminal(); got != tc.expectedIsTerminal {
+			if got := tc.target.isTerminal(); !ptr.Equal(got, tc.expectedIsTerminal) {
 				t.Errorf("got isTerminal %v, want %v", got, tc.expectedIsTerminal)
 			}
 		})
@@ -232,6 +242,16 @@ func TestTerminalTime(t *testing.T) {
 					},
 				}))),
 			expectedTerminalTime: new(clock.Now()),
+		},
+		{
+			name: "pod_gone_but_new_pod_container_termination_time_present",
+			target: newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"), mkValidPod("my-pod", "uid-2",
+				setPodDeletionPhase(v1.PodSucceeded), setPodContainerStatuses(v1.ContainerStatus{
+					State: v1.ContainerState{
+						Terminated: &v1.ContainerStateTerminated{FinishedAt: metav1.Time{Time: clock.Now()}},
+					},
+				}))),
+			expectedTerminalTime: nil,
 		},
 	}
 	for _, tc := range testCases {
@@ -305,6 +325,17 @@ func TestEvictionResponders(t *testing.T) {
 		{
 			name:           "no_target;_pod_not_found_with_no_default_responders",
 			target:         newTargetInfoForEviction(lifecyclev1alpha1.EvictionTarget{}, nil),
+			includeDefault: true,
+			want:           nil,
+		},
+		{
+			name: "pod_gone_but_new_pod_with_responders_plus_default_ones",
+			target: newTargetInfoForEviction(mkValidPodTarget("my-pod", "uid-1"),
+				mkValidPod("my-pod", "uid-2", setEvictionResponders(
+					v1.EvictionResponder{Name: "responder-a", Priority: new(int32(1000))},
+					v1.EvictionResponder{Name: "responder-b", Priority: new(int32(15000))},
+				)),
+			),
 			includeDefault: true,
 			want:           nil,
 		},
